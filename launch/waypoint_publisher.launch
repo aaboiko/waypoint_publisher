@@ -1,0 +1,5 @@
+<launch>
+    <node pkg="waypoint_publisher" type="waypoint_publisher" name="waypoint_publisher_node">
+    
+  </node>
+</launch>

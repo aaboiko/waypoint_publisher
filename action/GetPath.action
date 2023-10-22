@@ -1,0 +1,9 @@
+Point2i start
+Point2i destination
+float64 cell_size
+float64[] koefs
+---
+bool success
+Point2i[] path
+---
+int32 progress
