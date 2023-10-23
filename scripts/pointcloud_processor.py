@@ -7,8 +7,6 @@ import actionlib
 import waypoint_publisher.msg as msg
 from datetime import datetime
 
-filepath = '/home/anatoliy/cloud.ply'
-
 z_min = -1.0
 z_max = 2.0
 
@@ -283,6 +281,7 @@ class GetPathAction(object):
     def execute_cb(self, goal):
         success = True
         save_map = self.params[3]
+        filepath = self.params[4]
 
         cell_size = float(goal.cell_size)
         koefs = np.array(goal.koefs)
@@ -296,7 +295,7 @@ class GetPathAction(object):
         path_array, success = run_path_planning(costmap, start, dest, self.params)
 
         if save_map:
-            filename = 'map_'
+            filename = 'src/waypoint_publisher/maps/map_'
             now = datetime.now()
             dt_string = now.strftime("%d.%m.%Y_%H:%M:%S")
             filename += dt_string
@@ -313,6 +312,10 @@ class GetPathAction(object):
 
         self._result.path = res_array
         self._result.success = success
+        self._result.xmin = xmin
+        self._result.ymin = ymin
+        self._result.xmax = xmax
+        self._result.ymax = ymax
 
         self._as.set_succeeded(self._result)
 
@@ -323,7 +326,8 @@ def run_node():
     plot_expanded_param = rospy.get_param('plot_expanded', False)
     plot_costs_param = rospy.get_param('plot_costs', False)
     save_map = rospy.get_param('save_map', False)
-    params = [plot_map_param, plot_expanded_param, plot_costs_param, save_map]
+    filepath = rospy.get_param('filepath', '/home/anatoliy/cloud.ply')
+    params = [plot_map_param, plot_expanded_param, plot_costs_param, save_map, filepath]
     rospy.loginfo('Node pointcloud_processor init')
 
     server = GetPathAction(rospy.get_name(), params)

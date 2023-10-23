@@ -4,6 +4,10 @@ float64 cell_size
 float64[] koefs
 ---
 bool success
+float64 xmin
+float64 ymin
+float64 xmax
+float64 ymax
 Point2i[] path
 ---
 int32 progress

@@ -5,6 +5,7 @@ find_package(catkin REQUIRED COMPONENTS
   actionlib
   actionlib_msgs
   geometry_msgs
+  gazebo_msgs
   move_base
   move_base_msgs
   roscpp
@@ -12,7 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   smach
   std_msgs
   tf
-  ecl_threads
+  ecl_threadsS
 )
 #find_package(PCL 1.13 REQUIRED)
 #find_package (Eigen3 3.4 REQUIRED NO_MODULE)
@@ -46,6 +47,7 @@ add_action_files(
    std_msgs
    move_base_msgs
    actionlib_msgs
+   gazebo_msgs
  )
 
 catkin_package(
@@ -55,6 +57,7 @@ catkin_package(
   CATKIN_DEPENDS 
   actionlib 
   geometry_msgs 
+  gazebo_msgs
   move_base 
   move_base_msgs 
   roscpp 
