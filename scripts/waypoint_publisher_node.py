@@ -5,12 +5,41 @@ from geometry_msgs.msg import Twist, Pose
 from gazebo_msgs.msg import ModelState
 from gazebo_msgs.srv import GetModelState, SetModelState
 from tf.transformations import euler_from_quaternion
+import timeit
 
 def grid_to_float(point, offset, cell_size):
     x = cell_size * point[0] + cell_size / 2 + offset[0]
     y = cell_size * point[1] + cell_size / 2 + offset[1]
     theta = (np.pi / 4) * point[2]
     return [x, y, theta]
+
+def add_orientation_to_path(path):
+    for i in range(1, len(path)):
+        dx = path[i][0] - path[i - 1][0]
+        dy = path[i][1] - path[i - 1][1]
+
+        if dx == -1:
+            if dy == -1:
+                path[i - 1].append(5)
+            elif dy == 0:
+                path[i - 1].append(4)
+            else:
+                path[i - 1].append(3)
+        elif dx == 0:
+            if dy == -1:
+                path[i - 1].append(6)
+            else:
+                path[i - 1].append(2)
+        else:
+            if dy == -1:
+                path[i - 1].append(7)
+            elif dy == 0:
+                path[i - 1].append(0)
+            else:
+                path[i - 1].append(1)
+
+    path[i].append(path[i - 1][2])
+    return path
 
 
 def float_to_grid(point, offset, cell_size):
@@ -32,12 +61,13 @@ def get_pose_from_gazebo(topic, robot_name, frame_id):
     return state
 
 
-def reset_pose_gazebo(gazebo_set_topic, robot_name):
+def reset_pose_gazebo(gazebo_set_topic, robot_name, pose):
+    x, y, z = pose
     state_msg = ModelState()
     state_msg.model_name = robot_name
-    state_msg.pose.position.x = 0
-    state_msg.pose.position.y = 0
-    state_msg.pose.position.z = 0
+    state_msg.pose.position.x = x
+    state_msg.pose.position.y = y
+    state_msg.pose.position.z = z
     state_msg.pose.orientation.x = 0
     state_msg.pose.orientation.y = 0
     state_msg.pose.orientation.z = 0
@@ -51,6 +81,66 @@ def reset_pose_gazebo(gazebo_set_topic, robot_name):
     except:
         rospy.logerr('Error: set state server unavailable')
 
+
+def move_to_goal(velocity_topic, gazebo_get_topic, cell_size, robot_name, frame_id, grid_path, vel):
+    rate = rospy.Rate(10)
+    vel_pub = rospy.Publisher(velocity_topic, Twist, queue_size=10)
+    path = add_orientation_to_path(grid_path)
+
+    traj = []
+    offset = [0.0, 0.0]
+    for pose in path:
+        p = grid_to_float(pose, offset, cell_size)
+        traj.append(p)
+
+    speed = Twist()
+
+    def goal_reached(pose, cell_size):
+        state = get_pose_from_gazebo(gazebo_get_topic, robot_name, frame_id)
+        cur_x = state.pose.position.x
+        cur_y = state.pose.position.y
+        curr_p = np.array([cur_x, cur_y])
+        curr_goal = np.array([pose[0], pose[1]])
+        delta = np.linalg.norm(curr_p - curr_goal)
+
+        if delta < cell_size / 2:
+            rospy.loginfo('Goal reached: ' + str(curr_goal))
+
+        return delta < cell_size / 2
+
+    for pose in traj:
+        timestamp = timeit.default_timer()
+        while not goal_reached(pose, cell_size):
+            cur_time = timeit.default_timer()
+            dt = cur_time - timestamp
+            if dt > 10.0 * np.sqrt(2) * cell_size / vel:
+                rospy.loginfo('Goal ' + str(pose) + ' is not traversable. The path is invalid')
+                rospy.loginfo('Time to try: ' + str(dt) + ' secs')
+                return False
+            
+            state = get_pose_from_gazebo(gazebo_get_topic, robot_name, frame_id)
+            x = state.pose.position.x
+            y = state.pose.position.y
+            rot = state.pose.orientation
+            (roll, pitch, theta) = euler_from_quaternion([rot.x, rot.y, rot.z, rot.w])
+
+            inc_x = pose[0] - x
+            inc_y = pose[1] - y
+
+            angle_to_goal = np.arctan2(inc_y, inc_x)
+            inc_angle = angle_to_goal - theta
+            k = 2.0
+            speed.angular.z = k * cell_size * inc_angle
+            
+            if abs(inc_angle) > 0.1:
+                speed.linear.x = 0.0
+            else:
+                speed.linear.x = vel
+
+            vel_pub.publish(speed)
+            rate.sleep()  
+
+    return True
 
 def get_path_client(goal):
     client = actionlib.SimpleActionClient('pointcloud_processor', msg.GetPathAction)
@@ -88,10 +178,10 @@ def callback_get_path_feedback(feedback):
 def main():
     rospy.init_node('waypoint_publisher')
 
-    velocity_topic = rospy.get_param('velocity_topic','/mobile_base/commands/velocity')
+    velocity_topic = rospy.get_param('velocity_topic','/cmd_vel')
     gazebo_get_topic = rospy.get_param('gazebo_get_topic','/gazebo/get_model_state')
     gazebo_set_topic = rospy.get_param('gazebo_set_topic','/gazebo/set_model_state')
-    robot_name = rospy.get_param('robot_name','mobile_base')
+    robot_name = rospy.get_param('robot_name','leo')
     frame_id = rospy.get_param('frame_id','ground_plane')
 
     start = msg.Point2i(x=0, y=0)
@@ -101,76 +191,26 @@ def main():
 
     goal = msg.GetPathGoal(start=start, destination=dest, cell_size=cell_size, koefs=koefs)
     #get_path_client(goal)
+    vel = 1.0
 
-    rate = rospy.Rate(10)
-    vel_pub = rospy.Publisher(velocity_topic, Twist, queue_size=10)
-    path = [[1, 0], [2, 0], [3, 1], [3, 2], [2, 2]]
-    init_pose = [0, 0]
-    
-    for i in range(1, len(path)):
-        dx = path[i][0] - path[i - 1][0]
-        dy = path[i][1] - path[i - 1][1]
-
-        if dx == -1:
-            if dy == -1:
-                path[i - 1].append(5)
-            elif dy == 0:
-                path[i - 1].append(4)
-            else:
-                path[i - 1].append(3)
-        elif dx == 0:
-            if dy == -1:
-                path[i - 1].append(6)
-            else:
-                path[i - 1].append(2)
-        else:
-            if dy == -1:
-                path[i - 1].append(7)
-            elif dy == 0:
-                path[i - 1].append(0)
-            else:
-                path[i - 1].append(1)
-
-    path[i].append(path[i - 1][2])
-
-    traj = []
-    offset = [-17.0, -22.0]
-    for pose in path:
-        p = grid_to_float(pose, offset, cell_size)
-        traj.append(p)
-
+    grid_path = [[0, 0], [2, 0], [4, 0], [6, 2], [6, 4], [4, 4]]
+    #traversable = move_to_goal(velocity_topic, gazebo_get_topic, cell_size, robot_name, frame_id, grid_path, vel)
     speed = Twist()
-
-
+    rate = rospy.Rate(10)
+    pub = rospy.Publisher(velocity_topic, Twist, queue_size=10)
     while not rospy.is_shutdown():
-        state = get_pose_from_gazebo(gazebo_get_topic, robot_name, frame_id)
-        x = state.pose.position.y
-        y = state.pose.position.x
-        rot = state.pose.orientation
-        (roll, pitch, theta) = euler_from_quaternion([rot.x, rot.y, rot.z, rot.w])
+        speed.linear.x = 1.0
+        speed.linear.y = 1.0
+        speed.linear.z = 0.0
 
-        if abs(x - dest.x) < 0.1 and abs(y - dest.y < 0.1):
-            print('Goal reached')
-            break
-        else:
-            print('To the goal: ' + str(x - dest.x) + ' ' + str(y - dest.y))
-
-        inc_x = dest.x - x
-        inc_y = dest.y - y
-
-        angle_to_goal = np.arctan2(inc_y, inc_x)
-
-        if abs(angle_to_goal - theta) > 0.1:
-            speed.linear.x = 0.0
-            speed.angular.z = 0.3
-        else:
-            speed.linear.x = 0.5
-            speed.angular.z = 0.0
-
-        vel_pub.publish(speed)
-        rate.sleep()  
-
-    reset_pose_gazebo(gazebo_set_topic, robot_name)
+        speed.angular.x = 0.0
+        speed.angular.y = 0.0
+        speed.angular.z = 1.0
+        pub.publish(speed)
+        rate.sleep()
+    
+    #pose = [0.5, 0.0, 1.0]
+    #reset_pose_gazebo(gazebo_set_topic, robot_name, pose)
 
     #rospy.spin()
 
