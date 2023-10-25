@@ -197,6 +197,12 @@ def float_to_grid(point, offset, cell_size):
     return [x, y]
 
 
+def grid_to_float(point, offset, cell_size):
+    x = cell_size * point[0] + cell_size / 2 + offset[0]
+    y = cell_size * point[1] + cell_size / 2 + offset[1]
+    return [x, y]
+
+
 def run_path_planning(occ_map, initial, dest, offset, cell_size, params):
     plot_map_param, plot_expanded_param, plot_costs_param, save_map, filepath = params
 
@@ -314,10 +320,9 @@ class GetPathAction(object):
         
         res_array = []
         for point in path_array:
-            point2i = msg.Point2i()
-            point2i.x = point[0]
-            point2i.y = point[1]
-            res_array.append(point2i)
+            point_f = grid_to_float(point, offset, cell_size)
+            point2f = msg.Point2f(x=point_f[0], y=point_f[1])
+            res_array.append(point2f)
 
         self._result.path = res_array
         self._result.success = success

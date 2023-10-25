@@ -7,12 +7,6 @@ from gazebo_msgs.srv import GetModelState, SetModelState
 from tf.transformations import euler_from_quaternion
 import timeit
 
-def grid_to_float(point, offset, cell_size):
-    x = cell_size * point[0] + cell_size / 2 + offset[0]
-    y = cell_size * point[1] + cell_size / 2 + offset[1]
-    theta = (np.pi / 4) * point[2]
-    return [x, y, theta]
-
 def add_orientation_to_path(path):
     for i in range(1, len(path)):
         dx = path[i][0] - path[i - 1][0]
@@ -76,16 +70,9 @@ def reset_pose_gazebo(gazebo_set_topic, robot_name, pose):
         rospy.logerr('Error: set state server unavailable')
 
 
-def move_to_goal(velocity_topic, gazebo_get_topic, cell_size, robot_name, frame_id, grid_path, vel):
+def move_to_goal(velocity_topic, gazebo_get_topic, cell_size, robot_name, frame_id, traj, vel):
     rate = rospy.Rate(10)
     vel_pub = rospy.Publisher(velocity_topic, Twist, queue_size=10)
-    path = add_orientation_to_path(grid_path)
-
-    traj = []
-    offset = [0.0, 0.0]
-    for pose in path:
-        p = grid_to_float(pose, offset, cell_size)
-        traj.append(p)
 
     speed = Twist()
 
@@ -159,10 +146,12 @@ def callback_get_path_done(state, result):
 
     path = []
     for i in result.path:
-        x = int(i.x)
-        y = int(i.y)
+        x = float(i.x)
+        y = float(i.y)
         point = np.array([x, y])
         path.append(point)
+
+    pass
 
 
 def callback_get_path_feedback(feedback):
@@ -189,6 +178,7 @@ def main():
 
     goal = msg.GetPathGoal(start=start, destination=dest, cell_size=cell_size, koefs=koefs)
     get_path_client(goal)
+
     vel = 1.0
 
     grid_path = [[0, 0], [2, 0], [4, 0], [6, 2], [6, 4], [4, 4]]

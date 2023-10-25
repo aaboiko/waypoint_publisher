@@ -8,6 +8,6 @@ float64 xmin
 float64 ymin
 float64 xmax
 float64 ymax
-Point2i[] path
+Point2f[] path
 ---
 int32 progress
