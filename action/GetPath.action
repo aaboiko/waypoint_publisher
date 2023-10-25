@@ -1,5 +1,5 @@
-Point2i start
-Point2i destination
+Point2f start
+Point2f destination
 float64 cell_size
 float64[] koefs
 ---

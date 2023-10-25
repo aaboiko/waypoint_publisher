@@ -13,8 +13,9 @@ find_package(catkin REQUIRED COMPONENTS
   smach
   std_msgs
   tf
-  ecl_threadsS
+  ecl_threads
 )
+
 #find_package(PCL 1.13 REQUIRED)
 #find_package (Eigen3 3.4 REQUIRED NO_MODULE)
 
@@ -24,6 +25,7 @@ add_message_files(
    DIRECTORY msg
    FILES
    Point2i.msg
+   Point2f.msg
 )
 
 ## Generate services in the 'srv' folder

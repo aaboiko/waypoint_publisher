@@ -191,8 +191,14 @@ def get_heuristic(cell, goal):
     return heuristic
 
 
-def run_path_planning(occ_map, start, goal, params):
-    plot_map_param, plot_expanded_param, plot_costs_param, save_map = params
+def float_to_grid(point, offset, cell_size):
+    x = int((point[0] - offset[0]) / cell_size)
+    y = int((point[1] - offset[1]) / cell_size)
+    return [x, y]
+
+
+def run_path_planning(occ_map, initial, dest, offset, cell_size, params):
+    plot_map_param, plot_expanded_param, plot_costs_param, save_map, filepath = params
 
     costs = np.ones(occ_map.shape) * np.inf
     closed_flags = np.zeros(occ_map.shape)
@@ -200,13 +206,15 @@ def run_path_planning(occ_map, start, goal, params):
     path_array = []
     success = False
 
+    start = float_to_grid(initial, offset, cell_size)
+    parent = start
+    goal = float_to_grid(dest, offset, cell_size)
+    costs[start[0], start[1]] = 0
+
     heuristic = np.zeros(occ_map.shape)
     for x in range(occ_map.shape[0]):
         for y in range(occ_map.shape[1]):
             heuristic[x, y] = get_heuristic([x, y], goal)
-
-    parent = start
-    costs[start[0], start[1]] = 0
 
     while not np.array_equal(parent, goal):
         open_costs = np.where(closed_flags==1, np.inf, costs) + heuristic
@@ -285,14 +293,15 @@ class GetPathAction(object):
 
         cell_size = float(goal.cell_size)
         koefs = np.array(goal.koefs)
-        start = [int(goal.start.x), int(goal.start.y)]
-        dest = [int(goal.destination.x), int(goal.destination.y)]
+        start = [float(goal.start.x), float(goal.start.y)]
+        dest = [float(goal.destination.x), float(goal.destination.y)]
 
         cloud, points_number = read_cloud(filepath)
         grid_size_x, grid_size_y, xmin, xmax, ymin, ymax = evaluate_cloud(cloud, cell_size)
+        offset = [xmin, ymin]
         point_grid = segmentate_cloud(cloud, grid_size_x, grid_size_y, xmin, xmax, ymin, ymax, cell_size)
         costmap = get_costmap(point_grid, grid_size_x, grid_size_y, koefs)
-        path_array, success = run_path_planning(costmap, start, dest, self.params)
+        path_array, success = run_path_planning(costmap, start, dest, offset, cell_size, self.params)
 
         if save_map:
             filename = 'src/waypoint_publisher/maps/map_'
@@ -326,7 +335,7 @@ def run_node():
     plot_expanded_param = rospy.get_param('plot_expanded', False)
     plot_costs_param = rospy.get_param('plot_costs', False)
     save_map = rospy.get_param('save_map', False)
-    filepath = rospy.get_param('filepath', '/home/anatoliy/cloud.ply')
+    filepath = rospy.get_param('filepath', '/home/anatoliy/cloud_house.ply')
     params = [plot_map_param, plot_expanded_param, plot_costs_param, save_map, filepath]
     rospy.loginfo('Node pointcloud_processor init')
 

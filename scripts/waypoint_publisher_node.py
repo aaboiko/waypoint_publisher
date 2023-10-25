@@ -42,12 +42,6 @@ def add_orientation_to_path(path):
     return path
 
 
-def float_to_grid(point, offset, cell_size):
-    x = int((point[0] - offset[0]) / cell_size)
-    y = int((point[1] - offset[1]) / cell_size)
-    return [x, y]
-
-
 def get_pose_from_gazebo(topic, robot_name, frame_id):
     rospy.wait_for_service(topic)
     state = GetModelState()
@@ -184,30 +178,22 @@ def main():
     robot_name = rospy.get_param('robot_name','leo')
     frame_id = rospy.get_param('frame_id','ground_plane')
 
-    start = msg.Point2i(x=0, y=0)
-    dest = msg.Point2i(x=10, y=10)
+    state = get_pose_from_gazebo(gazebo_get_topic, robot_name, frame_id)
+    x = state.pose.position.x
+    y = state.pose.position.y
+    start = msg.Point2f(x=x, y=y)
+
+    dest = msg.Point2f(x=10.0, y=10.0)
     cell_size = 1.0
-    koefs = [0.0, 0.0, 0.0]
+    koefs = [1.0, 1.0, 1.0]
 
     goal = msg.GetPathGoal(start=start, destination=dest, cell_size=cell_size, koefs=koefs)
-    #get_path_client(goal)
+    get_path_client(goal)
     vel = 1.0
 
     grid_path = [[0, 0], [2, 0], [4, 0], [6, 2], [6, 4], [4, 4]]
     #traversable = move_to_goal(velocity_topic, gazebo_get_topic, cell_size, robot_name, frame_id, grid_path, vel)
-    speed = Twist()
-    rate = rospy.Rate(10)
-    pub = rospy.Publisher(velocity_topic, Twist, queue_size=10)
-    while not rospy.is_shutdown():
-        speed.linear.x = 1.0
-        speed.linear.y = 1.0
-        speed.linear.z = 0.0
-
-        speed.angular.x = 0.0
-        speed.angular.y = 0.0
-        speed.angular.z = 1.0
-        pub.publish(speed)
-        rate.sleep()
+    
     
     #pose = [0.5, 0.0, 1.0]
     #reset_pose_gazebo(gazebo_set_topic, robot_name, pose)
