@@ -1,5 +1,6 @@
 Point2f start
 Point2f destination
+Point2f offset
 float64 cell_size
 float64[] koefs
 ---

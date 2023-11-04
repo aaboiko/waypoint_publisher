@@ -293,7 +293,6 @@ class GetPathAction(object):
         self.params = params
 
     def execute_cb(self, goal):
-        success = True
         save_map = self.params[3]
         filepath = self.params[4]
 
@@ -301,10 +300,11 @@ class GetPathAction(object):
         koefs = np.array(goal.koefs)
         start = [float(goal.start.x), float(goal.start.y)]
         dest = [float(goal.destination.x), float(goal.destination.y)]
+        offset = [float(goal.offset.x), float(goal.offset.y)]
 
         cloud, points_number = read_cloud(filepath)
         grid_size_x, grid_size_y, xmin, xmax, ymin, ymax = evaluate_cloud(cloud, cell_size)
-        offset = [xmin, ymin]
+        #offset = [xmin, ymin]
         point_grid = segmentate_cloud(cloud, grid_size_x, grid_size_y, xmin, xmax, ymin, ymax, cell_size)
         costmap = get_costmap(point_grid, grid_size_x, grid_size_y, koefs)
         path_array, success = run_path_planning(costmap, start, dest, offset, cell_size, self.params)
@@ -339,8 +339,8 @@ def run_node():
     plot_map_param = rospy.get_param('plot_map', False)
     plot_expanded_param = rospy.get_param('plot_expanded', False)
     plot_costs_param = rospy.get_param('plot_costs', False)
-    save_map = rospy.get_param('save_map', False)
-    filepath = rospy.get_param('filepath', '/home/anatoliy/cloud_house.ply')
+    save_map = rospy.get_param('save_map', True)
+    filepath = rospy.get_param('filepath', '/home/anatoliy/.ros/cloud_lab_1.ply')
     params = [plot_map_param, plot_expanded_param, plot_costs_param, save_map, filepath]
     rospy.loginfo('Node pointcloud_processor init')
 

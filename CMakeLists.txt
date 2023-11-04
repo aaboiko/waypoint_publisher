@@ -88,6 +88,7 @@ include_directories(
  catkin_install_python(PROGRAMS
    scripts/waypoint_publisher_node.py
    scripts/pointcloud_processor.py
+   scripts/fit_model.py
    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
  )
 

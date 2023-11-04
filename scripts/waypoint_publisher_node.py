@@ -173,10 +173,11 @@ def main():
     start = msg.Point2f(x=x, y=y)
 
     dest = msg.Point2f(x=10.0, y=10.0)
+    offset = msg.Point2f(x=0.0, y=0.0)
     cell_size = 1.0
-    koefs = [1.0, 1.0, 1.0]
+    koefs = [0.0, 0.0, 0.0]
 
-    goal = msg.GetPathGoal(start=start, destination=dest, cell_size=cell_size, koefs=koefs)
+    goal = msg.GetPathGoal(start=start, destination=dest, offset=offset, cell_size=cell_size, koefs=koefs)
     get_path_client(goal)
 
     vel = 1.0
