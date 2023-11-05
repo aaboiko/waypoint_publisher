@@ -112,7 +112,7 @@ def get_plane_inclination(segment):
 
 
 def cost_function(params, koefs):
-    return 1.0 / (1.0 + np.exp(-np.dot(koefs, params)))
+    return 2 * (1.0 / (1.0 + np.exp(-np.dot(koefs, params)))) - 1.0
 
 
 def plot_map(occ_map, start, goal):
@@ -168,7 +168,7 @@ def get_neighborhood(cell, occ_map_shape):
 
 def get_edge_cost(parent, child, occ_map):
     edge_cost = 0
-    thres = 0.6
+    thres = 0.5
     k = 10
 
     if occ_map[child[0], child[1]] < thres:

@@ -131,6 +131,7 @@ def get_path_client(goal):
                     done_cb=callback_get_path_done)
     
     client.wait_for_result()
+    return client.get_result()
 
 
 def callback_get_path_active():
@@ -178,7 +179,7 @@ def main():
     koefs = [0.0, 0.0, 0.0]
 
     goal = msg.GetPathGoal(start=start, destination=dest, offset=offset, cell_size=cell_size, koefs=koefs)
-    get_path_client(goal)
+    result = get_path_client(goal)
 
     vel = 1.0
 

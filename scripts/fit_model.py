@@ -20,18 +20,6 @@ def callback_get_path_with_koefs_active():
 def callback_get_path_with_koefs_done(state, result):
     rospy.loginfo("GetPath server is done")
     success = result.success
-    xmin = float(result.xmin)
-    xmax = float(result.xmax)
-    ymin = float(result.ymin)
-    ymax = float(result.ymax)
-
-    path = []
-    for i in result.path:
-        x = float(i.x)
-        y = float(i.y)
-        point = np.array([x, y])
-        path.append(point)
-
     return success
 
 
@@ -39,11 +27,7 @@ def callback_get_path_with_koefs_feedback(feedback):
     rospy.loginfo("GetPath server feedback:%s" % str(feedback))
 
 
-def run_fit_model_node():
-    rospy.init_node('fit_model')
-    
-    filename_koefs = 'src/waypoint_publisher/koefs/koefs.txt'
-    koefs = np.loadtxt(filename_koefs)
+def try_with_koefs(koefs):
     offset = msg.Point2f(x=-7.990018, y=-11.153976)
     cell_size = 0.050000
     start = msg.Point2f(x=0.0, y=0.0)
@@ -51,9 +35,17 @@ def run_fit_model_node():
 
     goal = msg.GetPathGoal(start=start, destination=dest, offset=offset, cell_size=cell_size, koefs=koefs)
     result = get_path_with_koefs(goal)
-    print('Result')
-    print(result)
-    
+    rospy.loginfo(result)
+
+    success = result.success
+    return success
+
+
+def run_fit_model_node():
+    rospy.init_node('fit_model')
+    filename_koefs = 'src/waypoint_publisher/koefs/koefs.txt'
+    koefs = np.loadtxt(filename_koefs)
+    success = try_with_koefs(koefs)
 
 try:
     run_fit_model_node()

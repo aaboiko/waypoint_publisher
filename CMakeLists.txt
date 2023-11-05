@@ -89,6 +89,7 @@ include_directories(
    scripts/waypoint_publisher_node.py
    scripts/pointcloud_processor.py
    scripts/fit_model.py
+   scripts/empiric_eval.py
    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
  )
 
