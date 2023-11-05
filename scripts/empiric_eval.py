@@ -1,12 +1,12 @@
 import rospy, actionlib
 import numpy as np
-import pandas as pd
 import open3d as pcl
 from geometry_msgs.msg import Twist, Pose
 from gazebo_msgs.msg import ModelState
 from gazebo_msgs.srv import GetModelState, SetModelState
 from tf.transformations import euler_from_quaternion
 from numpy.linalg import inv
+from csv import writer
 import timeit
 
 def float_to_grid(point, offset, cell_size):
@@ -74,8 +74,9 @@ def segmentate_cloud(cloud, size_x, size_y, xmin, xmax, ymin, ymax, cell_size):
 def get_plane_inclination(segment):
     n = len(segment)
     big = 10e6
+    zmax = -np.inf
     if n < 3:
-        return big, big, big
+        return big, big, big, 0.0
 
     count_param = 1.0 / n
     sign = -1.0
@@ -87,6 +88,7 @@ def get_plane_inclination(segment):
         y = segment[i][1]
         z = segment[i][2]
         A[i,:] = np.array([x, y, z])
+        zmax = max(zmax, z)
 
     X = inv(np.dot(A.T, A)) @ A.T @ B
 
@@ -105,12 +107,12 @@ def get_plane_inclination(segment):
     X = X / x_norm
     
     if abs(X[2]) <= 10e-3:
-        return big, sigma, count_param
+        return big, sigma, count_param, zmax
 
     inc_cos = X[2]
     inc_param = np.sqrt(1.0 - inc_cos**2) / inc_cos
 
-    return inc_param, sigma, count_param
+    return inc_param, sigma, count_param, zmax
 
 
 def get_pose(get_topic, robot_name, frame_id):
@@ -126,11 +128,8 @@ def get_pose(get_topic, robot_name, frame_id):
     return state
 
 
-def set_pose(set_topic, robot_name, pose, rot):
-    x, y, z = pose
-    w = 0.0
-    if rot:
-        w = np.pi / 2
+def set_pose(set_topic, robot_name, pose):
+    x, y, z, w = pose
     
     state_msg = ModelState()
     state_msg.model_name = robot_name
@@ -146,7 +145,7 @@ def set_pose(set_topic, robot_name, pose, rot):
     try:
         set_state = rospy.ServiceProxy(set_topic, SetModelState)
         result = set_state(state_msg)
-        rospy.loginfo('Pose is set succcessfully: ' + str(state_msg))
+        rospy.loginfo('Pose is set successfully: ' + str(state_msg))
     except:
         rospy.logerr('Error: gazebo server unavailable')
 
@@ -174,7 +173,7 @@ def move_to(get_topic, vel_topic, robot_name, pose, frame_id, cell_size, v):
     while not goal_reached(pose):
         cur_time = timeit.default_timer()
         dt = cur_time - timestamp
-        if dt > 5.0 * cell_size / v:
+        if dt > 20.0 * cell_size / v:
             rospy.loginfo('Goal ' + str(pose) + ' is not traversable')
             rospy.loginfo('Time to try: ' + str(dt) + ' secs')
             return False
@@ -209,24 +208,17 @@ def investigate_cell(cell, cell_size, offset, v, get_topic, set_topic, vel_topic
     rospy.loginfo('Starting investigating cell (' + str(x_cell) + ' ' + str(y_cell) + ')')
     center = grid_to_float(cell, offset, cell_size)
 
-    start = [center[0] - cell_size / 2, center[1], z]
-    dest = [center[0] + cell_size / 2, center[1], z]
-    set_pose(set_topic, robot_name, start, False)
+    start = [center[0] - cell_size / 2, center[1], z, 0.0]
+    dest = [center[0] + cell_size / 2, center[1], z, 0.0]
+    set_pose(set_topic, robot_name, start)
     res = move_to(get_topic, vel_topic, robot_name, dest, frame_id, cell_size, v)
     if not res:
-        return False
+        return 0
     
-    start = [center[0], center[1] - cell_size / 2, z]
-    dest = [center[0], center[1] + cell_size / 2, z]
-    set_pose(set_topic, robot_name, start, True)
-    res = move_to(get_topic, vel_topic, robot_name, dest, frame_id, cell_size, v)
-    if not res:
-        return False
-    
-    return True
+    return 1
 
 
-def eval_traversability(point_grid, size_x, size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, z):
+def eval_traversability(point_grid, size_x, size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, save_data, datapath):
     rospy.loginfo('Starting traversability analysis to generate dataset...')
     iter = 0.0
     progress = 0
@@ -234,19 +226,35 @@ def eval_traversability(point_grid, size_x, size_y, cell_size, offset, v, get_to
     count = size_x * size_y
     n_traversable = 0
 
+    if save_data:
+        line = ['inc_param', 'sigma', 'count_param', 'traversable']
+        with open(datapath, 'a') as f_obj:
+            obj = writer(f_obj)
+            obj.writerow(line)
+            f_obj.close()
+        rospy.loginfo('New dataset file created: ' + datapath)
+
     for i in range(size_x):
         for j in range(size_y):
-            inc_param, sigma, count_param = get_plane_inclination(point_grid[(i,j)])
+            inc_param, sigma, count_param, zmax = get_plane_inclination(point_grid[(i,j)])
             cell = [i, j]
             iter += 1.0
             progress = int((iter / count) * 100)
 
-            if count_param >= 1.0:
+            if count_param > 1.0:
                 continue
 
-            res = investigate_cell(cell, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, z)
-            if res:
+            res = investigate_cell(cell, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, zmax + 0.2)
+            if res > 0:
                 n_traversable += 1
+
+            if save_data:
+                line = [inc_param, sigma, count_param, res]
+                with open(datapath, 'a') as f_obj:
+                    obj = writer(f_obj)
+                    obj.writerow(line)
+                    f_obj.close()
+                rospy.loginfo('Line written to the dataset: ' + str(line))
 
             if progress != prev:
                 rospy.loginfo('Analysis in progress: [' + str(progress) + '%]')
@@ -260,7 +268,7 @@ def eval_traversability(point_grid, size_x, size_y, cell_size, offset, v, get_to
 def empiric_eval():
     rospy.init_node('empiric_eval')
 
-    filepath = rospy.get_param('filepath', '/home/anatoliy/.ros/cloud.ply')
+    filepath = rospy.get_param('filepath', '/home/anatoliy/cloud.ply')
     datapath = rospy.get_param('datapath', 'src/waypoint_publisher/dataset/data_marsyard2020.csv')
     cell_size = rospy.get_param('cell_size', 1.0)
     get_topic = rospy.get_param('gazebo_get_topic','/gazebo/get_model_state')
@@ -268,15 +276,15 @@ def empiric_eval():
     vel_topic = rospy.get_param('velocity_topic','/cmd_vel')
     robot_name = rospy.get_param('robot_name','leo')
     frame_id = rospy.get_param('frame_id','ground_plane')
-    v = rospy.get_param('velocity', 1.0)
+    v = rospy.get_param('velocity', 2.0)
+    save_data = rospy.get_param('save_data', True)
 
     rospy.loginfo('Empiric eval node is running')
     cloud, points_number = read_cloud(filepath)
     grid_size_x, grid_size_y, xmin, xmax, ymin, ymax, zmin, zmax = evaluate_cloud(cloud, cell_size)
     offset = [xmin, ymin]
-    z = zmax + 0.2
     point_grid = segmentate_cloud(cloud, grid_size_x, grid_size_y, xmin, xmax, ymin, ymax, cell_size)
-    eval_traversability(point_grid, grid_size_x, grid_size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, z)
+    eval_traversability(point_grid, grid_size_x, grid_size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, save_data, datapath)
 
 
 try:
