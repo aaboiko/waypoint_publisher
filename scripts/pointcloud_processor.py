@@ -105,7 +105,7 @@ def get_plane_inclination(segment):
     if abs(X[2]) <= 10e-3:
         return big, sigma, count_param
 
-    inc_cos = X[2]
+    inc_cos = abs(X[2])
     inc_param = np.sqrt(1.0 - inc_cos**2) / inc_cos
 
     return inc_param, sigma, count_param
