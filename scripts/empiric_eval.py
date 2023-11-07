@@ -150,12 +150,12 @@ def set_pose(set_topic, robot_name, pose):
     try:
         set_state = rospy.ServiceProxy(set_topic, SetModelState)
         result = set_state(state_msg)
-        rospy.loginfo('Pose is set successfully: ' + str(state_msg))
+        rospy.loginfo('New pose is set successfully')
     except:
         rospy.logerr('Error: gazebo server unavailable')
 
 
-def move_to(get_topic, vel_topic, robot_name, pose, frame_id, cell_size, v):
+def move_to(get_topic, vel_topic, robot_name, pose, frame_id, cell_size, v, wait):
     rate = rospy.Rate(10)
     vel_pub = rospy.Publisher(vel_topic, Twist, queue_size=10)
     speed = Twist()
@@ -164,43 +164,31 @@ def move_to(get_topic, vel_topic, robot_name, pose, frame_id, cell_size, v):
     while True:
         cur_time = timeit.default_timer()
         dt = cur_time - timestamp
-        '''if dt > 50.0 * cell_size / v:
+        if dt > wait:
             rospy.loginfo('Goal ' + str(pose) + ' is not traversable')
-            rospy.loginfo('Time to try: ' + str(dt) + ' secs')
-            return False'''
+            return False
         
         state = get_pose(get_topic, robot_name, frame_id)
         x = state.pose.position.x
         y = state.pose.position.y
-        rot = state.pose.orientation
-        curr_p = np.array([x, y])
-        curr_goal = np.array([pose[0], pose[1]])
-        delta = np.linalg.norm(curr_p - curr_goal)
 
-        if delta < 0.1:
+        if y < -10:
+            rospy.loginfo('Fallen!')
+            return False
+        
+        curr_p = np.array([x, y])
+        x_goal = pose[0]
+        y_goal = pose[1]
+        curr_goal = np.array([x_goal, y_goal])
+
+        print('dx: ' + str(x - x_goal) + ' x: ' + str(x) + ' y: ' + str(y))
+
+        if x >= x_goal:
             rospy.loginfo('Goal reached: ' + str(curr_goal))
             break
 
-        (roll, pitch, theta) = euler_from_quaternion([rot.x, rot.y, rot.z, rot.w])
-
-        inc_x = pose[0] - x
-        inc_y = pose[1] - y
-
-        angle_to_goal = np.arctan2(inc_y, inc_x)
-        inc_angle = angle_to_goal - theta
-        k = 2.0
-        #speed.angular.z = k * cell_size * inc_angle
-
-        ####################
-        #print('To goal: ' + str(angle_to_goal) + ' theta: ' + str(theta) + ' delta: ' + str(inc_angle))
-        ###################
-        
-        if abs(inc_angle) > 0.1:
-            speed.linear.x = v/2
-            speed.angular.z = inc_angle * v
-        else:
-            speed.linear.x = v
-            speed.angular.z = 0
+        speed.linear.x = v
+        speed.angular.z = 0
 
         vel_pub.publish(speed)
         rate.sleep() 
@@ -208,7 +196,7 @@ def move_to(get_topic, vel_topic, robot_name, pose, frame_id, cell_size, v):
     return True
 
 
-def investigate_cell(cell, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, z):
+def investigate_cell(cell, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, z, wait):
     x_cell, y_cell = cell
     rospy.loginfo('Starting investigating cell (' + str(x_cell) + ' ' + str(y_cell) + ')')
     center = grid_to_float(cell, offset, cell_size)
@@ -216,14 +204,14 @@ def investigate_cell(cell, cell_size, offset, v, get_topic, set_topic, vel_topic
     start = [center[0] - cell_size / 2, center[1], z, 0.0]
     dest = [center[0] + cell_size / 2, center[1], z, 0.0]
     set_pose(set_topic, robot_name, start)
-    res = move_to(get_topic, vel_topic, robot_name, dest, frame_id, cell_size, v)
+    res = move_to(get_topic, vel_topic, robot_name, dest, frame_id, cell_size, v, wait)
     if not res:
         return 0
     
     return 1
 
 
-def eval_traversability(point_grid, size_x, size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, save_data, datapath):
+def eval_traversability(point_grid, size_x, size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, save_data, datapath, wait):
     rospy.loginfo('Starting traversability analysis to generate dataset...')
     iter = 0.0
     progress = 0
@@ -249,7 +237,7 @@ def eval_traversability(point_grid, size_x, size_y, cell_size, offset, v, get_to
             if count_param > 1.0:
                 continue
 
-            res = investigate_cell(cell, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, zmax + 0.1)
+            res = investigate_cell(cell, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, zmax + 1.0, wait)
             if res > 0:
                 n_traversable += 1
 
@@ -265,7 +253,7 @@ def eval_traversability(point_grid, size_x, size_y, cell_size, offset, v, get_to
                 rospy.loginfo('Analysis in progress: [' + str(progress) + '%]')
                 prev = progress
 
-    trav_rate = (n_traversable / count) * 100
+    trav_rate = int((n_traversable / count) * 100)
     rospy.loginfo('Traversability analysis finished successfully')
     rospy.loginfo('Traversability rate: ' + str(trav_rate) + '% (' + str(n_traversable) + '/' + str(count) + ')')
 
@@ -278,18 +266,19 @@ def empiric_eval():
     cell_size = rospy.get_param('cell_size', 1.0)
     get_topic = rospy.get_param('gazebo_get_topic','/gazebo/get_model_state')
     set_topic = rospy.get_param('gazebo_set_topic','/gazebo/set_model_state')
-    vel_topic = rospy.get_param('velocity_topic','/cmd_vel')
+    vel_topic = rospy.get_param('velocity_topic','cmd_vel')
     robot_name = rospy.get_param('robot_name','leo')
     frame_id = rospy.get_param('frame_id','marsyard2020_terrain')
-    v = rospy.get_param('velocity', 2.0)
+    v = rospy.get_param('velocity', 10.0)
     save_data = rospy.get_param('save_data', True)
     visualize_cloud = rospy.get_param('visualize_cloud', False)
+    wait = rospy.get_param('wait', 30.0)
 
     cloud, points_number = read_cloud(filepath, visualize_cloud)
     grid_size_x, grid_size_y, xmin, xmax, ymin, ymax, zmin, zmax = evaluate_cloud(cloud, cell_size)
     offset = [xmin, ymin]
     point_grid = segmentate_cloud(cloud, grid_size_x, grid_size_y, xmin, xmax, ymin, ymax, cell_size)
-    eval_traversability(point_grid, grid_size_x, grid_size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, save_data, datapath)
+    eval_traversability(point_grid, grid_size_x, grid_size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, save_data, datapath, wait)
 
 
 try:
