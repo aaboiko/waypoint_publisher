@@ -258,6 +258,37 @@ def eval_traversability(point_grid, size_x, size_y, cell_size, offset, v, get_to
     rospy.loginfo('Traversability rate: ' + str(trav_rate) + '% (' + str(n_traversable) + '/' + str(count) + ')')
 
 
+def save_cloud_segments(cloud_grid, size_x, size_y, cloudpath):
+    iter = 0.0
+    progress = 0
+    prev = 0
+    count = size_x * size_y
+    rospy.loginfo('Starting saving clouds...')
+
+    for i in range(size_x):
+        for j in range(size_y):
+            iter += 1.0
+            progress = int((iter / count) * 100)
+
+            if progress != prev:
+                rospy.loginfo('Cloud saving in progress: [' + str(progress) + '%]')
+                prev = progress
+
+            cloud = cloud_grid[(i,j)]
+            path = cloudpath + '_' + str(i) + '_' + str(j) + '.csv'
+            with open(path, 'a') as f_obj:
+                if len(cloud) > 0:
+                    for point in cloud:
+                        x, y, z = point
+                        line = [float(x), float(y), float(z)]
+                        obj = writer(f_obj)
+                        obj.writerow(line)
+
+                f_obj.close()
+
+    rospy.loginfo('Clouds saved successfully')
+
+
 def empiric_eval():
     rospy.init_node('empiric_eval')
 
@@ -274,10 +305,17 @@ def empiric_eval():
     visualize_cloud = rospy.get_param('visualize_cloud', False)
     wait = rospy.get_param('wait', 30.0)
 
+    cloudpath = rospy.get_param('cloudpath', 'src/waypoint_publisher/clouds/')
+    save_cloud = rospy.get_param('save_cloud', False)
+
     cloud, points_number = read_cloud(filepath, visualize_cloud)
     grid_size_x, grid_size_y, xmin, xmax, ymin, ymax, zmin, zmax = evaluate_cloud(cloud, cell_size)
     offset = [xmin, ymin]
     point_grid = segmentate_cloud(cloud, grid_size_x, grid_size_y, xmin, xmax, ymin, ymax, cell_size)
+
+    if save_cloud:
+        save_cloud_segments(point_grid, grid_size_x, grid_size_y, cloudpath)
+
     eval_traversability(point_grid, grid_size_x, grid_size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, save_data, datapath, wait)
 
 
