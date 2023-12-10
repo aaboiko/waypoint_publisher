@@ -90,6 +90,7 @@ include_directories(
    scripts/pointcloud_processor.py
    scripts/fit_model.py
    scripts/empiric_eval.py
+   scripts/realtime_empiric.py
    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
  )
 

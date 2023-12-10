@@ -289,24 +289,51 @@ def save_cloud_segments(cloud_grid, size_x, size_y, cloudpath):
     rospy.loginfo('Clouds saved successfully')
 
 
+def save_inclination_costmap(cloud_grid, size_x, size_y, mappath):
+    iter = 0.0
+    progress = 0
+    prev = 0
+    count = size_x * size_y
+    rospy.loginfo('Starting saving clouds...')
+    costmap = np.zeros((size_x, size_y))
+
+    for i in range(size_x):
+        for j in range(size_y):
+            iter += 1.0
+            progress = int((iter / count) * 100)
+
+            if progress != prev:
+                rospy.loginfo('Costmap generating in progress: [' + str(progress) + '%]')
+                prev = progress
+
+            inc_param, sigma, count_param, zmax = get_plane_inclination(cloud_grid[(i,j)])
+            costmap[i, j] = np.sqrt(1 / (1 + inc_param**2))
+
+    np.savetxt(mappath, costmap, delimiter=' ')
+    rospy.loginfo('Costmap saved successfully')
+
+
 def empiric_eval():
     rospy.init_node('empiric_eval')
 
-    filepath = rospy.get_param('filepath', '/home/anatoliy/cloud.ply')
+    filepath = rospy.get_param('filepath', '/home/anatoliy/cloud_marsyard2020.ply')
     datapath = rospy.get_param('datapath', 'src/waypoint_publisher/dataset/data_marsyard2020.csv')
     cell_size = rospy.get_param('cell_size', 1.0)
     get_topic = rospy.get_param('gazebo_get_topic','/gazebo/get_model_state')
     set_topic = rospy.get_param('gazebo_set_topic','/gazebo/set_model_state')
     vel_topic = rospy.get_param('velocity_topic','cmd_vel')
+
     robot_name = rospy.get_param('robot_name','leo')
     frame_id = rospy.get_param('frame_id','marsyard2020_terrain')
     v = rospy.get_param('velocity', 10.0)
     save_data = rospy.get_param('save_data', True)
-    visualize_cloud = rospy.get_param('visualize_cloud', False)
+    visualize_cloud = rospy.get_param('visualize_cloud', True)
     wait = rospy.get_param('wait', 30.0)
 
     cloudpath = rospy.get_param('cloudpath', 'src/waypoint_publisher/clouds/')
     save_cloud = rospy.get_param('save_cloud', False)
+    mappath = rospy.get_param('mappath', 'src/waypoint_publisher/maps/map_cloud_marsyard2020.txt')
+    save_inc_costmap = rospy.get_param('save_inc_costmap', False)
 
     cloud, points_number = read_cloud(filepath, visualize_cloud)
     grid_size_x, grid_size_y, xmin, xmax, ymin, ymax, zmin, zmax = evaluate_cloud(cloud, cell_size)
@@ -316,7 +343,10 @@ def empiric_eval():
     if save_cloud:
         save_cloud_segments(point_grid, grid_size_x, grid_size_y, cloudpath)
 
-    eval_traversability(point_grid, grid_size_x, grid_size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, save_data, datapath, wait)
+    if save_inc_costmap:
+        save_inclination_costmap(point_grid, grid_size_x, grid_size_y, mappath)
+
+    #eval_traversability(point_grid, grid_size_x, grid_size_y, cell_size, offset, v, get_topic, set_topic, vel_topic, robot_name, frame_id, save_data, datapath, wait)
 
 
 try:

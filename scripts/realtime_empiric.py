@@ -1,0 +1,350 @@
+import rospy, actionlib
+import numpy as np
+import open3d as pcl
+from geometry_msgs.msg import Twist, Pose
+from gazebo_msgs.msg import ModelState
+from gazebo_msgs.srv import GetModelState, SetModelState
+from sensor_msgs.msg import PointCloud2
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
+from numpy.linalg import inv
+from csv import writer
+import timeit, time
+import ros_numpy
+
+class PointcloudHandler:
+    def __init__(self, params):
+        self.datapath =         params[0]
+        self.cell_size =        params[1]
+        self.get_topic =        params[2]
+        self.set_topic =        params[3]
+        self.vel_topic =        params[4]
+        self.robot_name =       params[5]
+        self.frame_id =         params[6]
+        self.v =                params[7]
+        self.save_data =        params[8]
+        self.visualize_cloud =  params[9]
+        self.wait =             params[10]
+        self.cloudpath =        params[11]
+        self.save_cloud =       params[12]
+        self.mappath =          params[13]
+        self.save_inc_costmap = params[14]
+        self.world_x_min =      params[15]
+        self.world_x_max =      params[16]
+        self.world_y_min =      params[17]
+        self.world_y_max =      params[18]
+        self.depth_topic =      params[19]
+
+        self.cloud_index = 0
+        self.cloud_obtained = False
+        self.sub = rospy.Subscriber(self.depth_topic, PointCloud2, self.get_cloud_callback)
+        rospy.loginfo('depth_topic subscriber started')
+
+        while not self.cloud_obtained:
+            pass
+        self.eval_traversability()
+        rospy.spin()
+
+        #########################
+        '''pose = [-9, -6, 1.0, 0, 0, 0, 0]
+        self.set_pose(pose)
+        rate = rospy.Rate(10)
+        vel_pub = rospy.Publisher(self.vel_topic, Twist, queue_size=10)
+        speed = Twist()
+
+        while(True):
+            speed.linear.x = self.v
+            speed.angular.z = 0
+
+            vel_pub.publish(speed)'''
+            #rate.sleep() 
+
+
+    def evaluate_cloud(self, cloud):
+        xmax, xmin, ymax, ymin, zmax, zmin = -np.inf, np.inf, -np.inf, np.inf, -np.inf, np.inf
+        
+        for point in cloud:
+            x, z, y = point
+            xmax = max(xmax, x)
+            xmin = min(xmin, x)
+            ymax = max(ymax, y)
+            ymin = min(ymin, y)
+            zmax = max(zmax, z)
+            zmin = min(zmin, z)
+
+        rospy.loginfo('xmin: %f, xmax: %f, ymin: %f, ymax: %f, zmin: %f, zmax: %f',xmin,xmax,ymin,ymax,zmin,zmax)
+
+        return xmin, xmax, ymin, ymax, zmin, zmax
+
+
+    def save_cloud_segment(self, cloud, cloudpath):
+        rospy.loginfo('Starting saving cloud...')
+        path = self.cloudpath + '_' + str(self.cloud_index) + '.csv'
+        self.cloud_index += 1
+
+        with open(path, 'a') as f_obj:
+                    if len(cloud) > 0:
+                        for point in cloud:
+                            x, y, z = point
+                            line = [float(x), float(y), float(z)]
+                            obj = writer(f_obj)
+                            obj.writerow(line)
+
+                    f_obj.close()
+
+        rospy.loginfo('Cloud saved successfully')
+
+
+    def get_segment(self, cloud):
+        res = []
+        for point in cloud:
+            x, z, y = point
+            if abs(x) <= self.cell_size / 2 and y <= self.cell_size + 0.5:
+                res.append(np.array([x, z, y]))
+        
+        return res
+
+
+    def get_plane_inclination(self, segment):
+        n = len(segment)
+        big = 10e6
+        zmax = -np.inf
+        zmin = np.inf
+
+        if n < 3:
+            return big, big, big, big, big
+
+        count_param = 1.0 / n
+        sign = -1.0
+        A = np.zeros((n, 3))
+        B = sign * np.ones((n, 1))
+
+        for i in range(n):
+            x = segment[i][0]
+            y = segment[i][1]
+            z = segment[i][2]
+            A[i,:] = np.array([x, y, z])
+            zmax = max(zmax, z)
+            zmin = min(zmin, z)
+
+        X = inv(np.dot(A.T, A)) @ A.T @ B
+
+        sigma = 0.0
+        if n > 3:
+            for i in range(n):
+                a = X[0]
+                b = X[1]
+                c = X[2]
+                x = segment[i][0]
+                y = segment[i][1]
+                z = segment[i][2]
+                sigma += ((a*x + b*y + c*z - sign)**2) / n
+
+        x_norm = np.linalg.norm(X)
+        X = X / x_norm
+        z_range_param = zmax - zmin
+        
+        if abs(X[2]) <= 10e-3:
+            return big, sigma, count_param, z_range_param, zmax
+
+        inc_cos = abs(X[2])
+        inc_param = np.sqrt(1.0 - inc_cos**2) / inc_cos
+
+        return inc_param, sigma, count_param, z_range_param, zmax
+    
+
+    def get_pose(self):
+        rospy.wait_for_service(self.get_topic)
+        state = GetModelState()
+
+        try:
+            get_model_state = rospy.ServiceProxy(self.get_topic, GetModelState)
+            state = get_model_state(self.robot_name, self.frame_id)
+        except:
+            rospy.logerr('Error: get state service unavailable')
+
+        return state
+
+
+    def set_pose(self, pose):
+        x, y, z, qx, qy, qz, qw = pose
+        
+        state_msg = ModelState()
+        state_msg.model_name = self.robot_name
+        state_msg.pose.position.x = x
+        state_msg.pose.position.y = y
+        state_msg.pose.position.z = z
+        state_msg.pose.orientation.x = qx
+        state_msg.pose.orientation.y = qy
+        state_msg.pose.orientation.z = qz
+        state_msg.pose.orientation.w = qw
+
+        rospy.wait_for_service(self.set_topic)
+        try:
+            set_state = rospy.ServiceProxy(self.set_topic, SetModelState)
+            result = set_state(state_msg)
+            rospy.loginfo('New pose is set successfully')
+        except:
+            rospy.logerr('Error: gazebo server unavailable')
+
+
+    def move_to(self, pose):
+        rate = rospy.Rate(10)
+        vel_pub = rospy.Publisher(self.vel_topic, Twist, queue_size=10)
+        speed = Twist()
+
+        timestamp = timeit.default_timer()
+        while True:
+            cur_time = timeit.default_timer()
+            dt = cur_time - timestamp
+            if dt > self.wait:
+                rospy.loginfo('Goal ' + str(pose) + ' is not traversable')
+                return False
+            
+            state = self.get_pose()
+            x = state.pose.position.x
+            y = state.pose.position.y
+            z = state.pose.position.z
+
+            if z < -10:
+                rospy.loginfo('Fallen!')
+                return False
+            
+            curr_p = np.array([x, y])
+            x_goal = pose[0]
+            y_goal = pose[1]
+            curr_goal = np.array([x_goal, y_goal])
+
+            print('dx: ' + str(x - x_goal) + ' x: ' + str(x) + ' y: ' + str(y))
+
+            delta = np.array([x - x_goal, y - y_goal])
+            if np.linalg.norm(delta <= 0.5):
+                rospy.loginfo('Goal reached: ' + str(curr_goal))
+                break
+
+            speed.linear.x = self.v
+            speed.angular.z = 0
+
+            vel_pub.publish(speed)
+            #rate.sleep() 
+
+        return True
+
+
+    def eval_traversability(self):
+        rospy.loginfo('Starting traversability analysis to generate dataset...')
+        size_x = self.world_x_max - self.world_x_min
+        size_y = self.world_y_max - self.world_y_min
+        iter = 0.0
+        progress = 0
+        prev = 0
+        count = size_x * size_y * 8
+        n_traversable = 0
+
+        if self.save_data:
+            rospy.loginfo('New dataset file created: ' + self.datapath)
+
+        for i in range(self.world_x_min, self.world_x_max, int(self.cell_size)):
+            for j in range(self.world_y_min, self.world_y_max, int(self.cell_size)):
+                for k in range(8):
+                    self.cloud_obtained = False
+                    segment = self.get_segment(self.pointcloud)
+                    while not self.cloud_obtained:
+                        pass
+                    inc_param, sigma, count_param, z_range_param, zmax = self.get_plane_inclination(segment)
+                    iter += 1.0
+                    progress = int((iter / count) * 100)
+
+                    angle = k * np.pi / 4
+                    x, y, z, w = quaternion_from_euler(0.0, 0.0, angle)
+                    pose = [i, j, zmax + 1.0, x, y, z, w]
+                    self.set_pose(pose)
+
+                    x_dest = i + (0.5 + self.cell_size * np.cos(angle))
+                    y_dest = j + (0.5 + self.cell_size * np.sin(angle))
+                    dest = [x_dest, y_dest]
+                    res = self.move_to(dest)
+
+                    if res > 0:
+                        n_traversable += 1
+
+                    if self.save_data:
+                        line = [float(inc_param), float(sigma), float(count_param), float(z_range_param), int(res)]
+                        with open(self.datapath, 'a') as f_obj:
+                            obj = writer(f_obj)
+                            obj.writerow(line)
+                            f_obj.close()
+                        rospy.loginfo('Line written to the dataset: ' + str(line))
+
+                    if progress != prev:
+                        rospy.loginfo('Analysis in progress: [' + str(progress) + '%]')
+                        prev = progress
+
+        trav_rate = int((n_traversable / count) * 100)
+        rospy.loginfo('Traversability analysis finished successfully')
+        rospy.loginfo('Traversability rate: ' + str(trav_rate) + '% (' + str(n_traversable) + '/' + str(count) + ')')
+
+
+    def get_cloud_callback(self, pointcloud2_msg):
+        self.pointcloud = ros_numpy.point_cloud2.pointcloud2_to_xyz_array(pointcloud2_msg)
+        self.cloud_obtained = True
+        
+        if self.save_cloud:
+            self.save_cloud_segment(self.pointcloud, self.cloudpath)
+    
+
+def realtime_empiric():
+    rospy.init_node('realtime_empiric', anonymous=True)
+    rospy.loginfo('realtime_empiric node init')
+
+    datapath = rospy.get_param('datapath', 'src/waypoint_publisher/dataset_realtime/house.csv')
+    cell_size = rospy.get_param('cell_size', 1.0)
+    get_topic = rospy.get_param('gazebo_get_topic','/gazebo/get_model_state')
+    set_topic = rospy.get_param('gazebo_set_topic','/gazebo/set_model_state')
+    vel_topic = rospy.get_param('velocity_topic','/mobile_base/commands/velocity')
+    depth_topic = rospy.get_param('depth_topic', '/camera/depth/points')
+
+    robot_name = rospy.get_param('robot_name','mobile_base')
+    frame_id = rospy.get_param('frame_id','ground_plane')
+    v = rospy.get_param('velocity', 10.0)
+    save_data = rospy.get_param('save_data', True)
+    visualize_cloud = rospy.get_param('visualize_cloud', False)
+    wait = rospy.get_param('wait', 30.0)
+
+    cloudpath = rospy.get_param('cloudpath', 'src/waypoint_publisher/clouds/')
+    save_cloud = rospy.get_param('save_cloud', False)
+    mappath = rospy.get_param('mappath', 'src/waypoint_publisher/maps_realtime/map_cloud_house.txt')
+    save_inc_costmap = rospy.get_param('save_inc_costmap', False)
+
+    world_x_min = rospy.get_param('world_x_min', -9)
+    world_x_max = rospy.get_param('world_x_max', 9)
+    world_y_min = rospy.get_param('world_y_min', -6)
+    world_y_max = rospy.get_param('world_y_max', 8)
+
+    params = [  datapath,
+                cell_size,
+                get_topic,
+                set_topic,
+                vel_topic,
+                robot_name,
+                frame_id,
+                v,
+                save_data,
+                visualize_cloud,
+                wait,
+                cloudpath,
+                save_cloud,
+                mappath,
+                save_inc_costmap,
+                world_x_min,
+                world_x_max,
+                world_y_min,
+                world_y_max,
+                depth_topic]
+    
+    handler = PointcloudHandler(params)
+
+
+try:
+    realtime_empiric()
+except rospy.ROSInterruptException:
+    rospy.loginfo('Unexpected ROSInterruptException')
