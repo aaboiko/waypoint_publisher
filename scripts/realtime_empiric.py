@@ -36,11 +36,10 @@ class PointcloudHandler:
 
         self.cloud_index = 0
         self.cloud_obtained = False
+        self.allow_get_cloud = False
         self.sub = rospy.Subscriber(self.depth_topic, PointCloud2, self.get_cloud_callback)
         rospy.loginfo('depth_topic subscriber started')
 
-        while not self.cloud_obtained:
-            pass
         self.eval_traversability()
         rospy.spin()
 
@@ -96,11 +95,24 @@ class PointcloudHandler:
 
     def get_segment(self, cloud):
         res = []
+        s = cloud.shape[0]
+        iter = 0.0
+        progress = 0
+        prev = 0
+        rospy.loginfo('Cloud reduction started...')
+
         for point in cloud:
             x, z, y = point
             if abs(x) <= self.cell_size / 2 and y <= self.cell_size + 0.5:
-                res.append(np.array([x, z, y]))
+                res.append(np.array([x, y, z]))
+
+            iter += 1.0
+            progress = int((iter / s) * 100)
+            if progress != prev:
+                rospy.loginfo('Progress: ' + str(progress) + '%')
+                prev = progress
         
+        rospy.loginfo('Cloud reduced. Number of points: ' + str(len(res)))
         return res
 
 
@@ -111,9 +123,8 @@ class PointcloudHandler:
         zmin = np.inf
 
         if n < 3:
-            return big, big, big, big, big
+            return big, big, 0, big, big
 
-        count_param = 1.0 / n
         sign = -1.0
         A = np.zeros((n, 3))
         B = sign * np.ones((n, 1))
@@ -144,12 +155,12 @@ class PointcloudHandler:
         z_range_param = zmax - zmin
         
         if abs(X[2]) <= 10e-3:
-            return big, sigma, count_param, z_range_param, zmax
+            return big, sigma, n, z_range_param, zmax
 
         inc_cos = abs(X[2])
         inc_param = np.sqrt(1.0 - inc_cos**2) / inc_cos
 
-        return inc_param, sigma, count_param, z_range_param, zmax
+        return inc_param, sigma, n, z_range_param, zmax
     
 
     def get_pose(self):
@@ -182,12 +193,12 @@ class PointcloudHandler:
         try:
             set_state = rospy.ServiceProxy(self.set_topic, SetModelState)
             result = set_state(state_msg)
-            rospy.loginfo('New pose is set successfully')
+            rospy.loginfo('New pose is set successfully: ' + str(pose))
         except:
             rospy.logerr('Error: gazebo server unavailable')
 
 
-    def move_to(self, pose):
+    def move_to(self, pose, k):
         rate = rospy.Rate(10)
         vel_pub = rospy.Publisher(self.vel_topic, Twist, queue_size=10)
         speed = Twist()
@@ -205,19 +216,31 @@ class PointcloudHandler:
             y = state.pose.position.y
             z = state.pose.position.z
 
-            if z < -10:
+            '''if z < -10:
                 rospy.loginfo('Fallen!')
-                return False
+                return False'''
             
-            curr_p = np.array([x, y])
             x_goal = pose[0]
             y_goal = pose[1]
             curr_goal = np.array([x_goal, y_goal])
 
-            print('dx: ' + str(x - x_goal) + ' x: ' + str(x) + ' y: ' + str(y))
+            print(' x = ' + str(x) + ' y = ' + str(y) + ' x_goal = '+str(x_goal)+' y_goal = '+str(y_goal))
 
-            delta = np.array([x - x_goal, y - y_goal])
-            if np.linalg.norm(delta <= 0.5):
+            '''delta = np.array([x - x_goal, y - y_goal])
+            if np.linalg.norm(delta) <= 0.5:
+                rospy.loginfo('Goal reached: ' + str(curr_goal))
+                break'''
+            
+            cond_0 = k == 0 and x >= x_goal
+            cond_1 = k == 1 and x >= x_goal and y >= y_goal
+            cond_2 = k == 2 and y >= y_goal
+            cond_3 = k == 3 and x <= x_goal and y >= y_goal
+            cond_4 = k == 4 and x <= x_goal
+            cond_5 = k == 5 and x <= x_goal and y <= y_goal
+            cond_6 = k == 6 and y <= y_goal
+            cond_7 = k == 7 and x >= x_goal and y <= y_goal
+
+            if cond_0 or cond_1 or cond_2 or cond_3 or cond_4 or cond_5 or cond_6 or cond_7:
                 rospy.loginfo('Goal reached: ' + str(curr_goal))
                 break
 
@@ -243,32 +266,39 @@ class PointcloudHandler:
         if self.save_data:
             rospy.loginfo('New dataset file created: ' + self.datapath)
 
-        for i in range(self.world_x_min, self.world_x_max, int(self.cell_size)):
-            for j in range(self.world_y_min, self.world_y_max, int(self.cell_size)):
+        for i in range(self.world_x_min, self.world_x_max + 1, int(self.cell_size)):
+            for j in range(self.world_y_min, self.world_y_max + 1, int(self.cell_size)):
                 for k in range(8):
+                    angle = k * np.pi / 4
+                    x, y, z, w = quaternion_from_euler(0.0, 0.0, angle)
+                    pose = [i, j, 0.1, x, y, z, w]
+                    self.set_pose(pose)
+
                     self.cloud_obtained = False
-                    segment = self.get_segment(self.pointcloud)
+                    self.allow_get_cloud = True
+                    rospy.loginfo('Waiting for cloud...')
                     while not self.cloud_obtained:
                         pass
-                    inc_param, sigma, count_param, z_range_param, zmax = self.get_plane_inclination(segment)
+                    segment = self.get_segment(self.pointcloud)
+                    inc_param, sigma, n_points, z_range_param, zmax = self.get_plane_inclination(segment)
                     iter += 1.0
                     progress = int((iter / count) * 100)
 
-                    angle = k * np.pi / 4
-                    x, y, z, w = quaternion_from_euler(0.0, 0.0, angle)
-                    pose = [i, j, zmax + 1.0, x, y, z, w]
-                    self.set_pose(pose)
+                    if n_points < 3:
+                        rospy.loginfo('Pointcloud contains < 3 points')
+                        continue
 
-                    x_dest = i + (0.5 + self.cell_size * np.cos(angle))
-                    y_dest = j + (0.5 + self.cell_size * np.sin(angle))
+                    x_dest = i + (0.5 + self.cell_size) * np.cos(angle)
+                    y_dest = j + (0.5 + self.cell_size) * np.sin(angle)
                     dest = [x_dest, y_dest]
-                    res = self.move_to(dest)
+                    
+                    res = self.move_to(dest, k)
 
                     if res > 0:
                         n_traversable += 1
 
                     if self.save_data:
-                        line = [float(inc_param), float(sigma), float(count_param), float(z_range_param), int(res)]
+                        line = [float(inc_param), float(sigma), float(n_points), float(z_range_param), int(res)]
                         with open(self.datapath, 'a') as f_obj:
                             obj = writer(f_obj)
                             obj.writerow(line)
@@ -285,8 +315,11 @@ class PointcloudHandler:
 
 
     def get_cloud_callback(self, pointcloud2_msg):
-        self.pointcloud = ros_numpy.point_cloud2.pointcloud2_to_xyz_array(pointcloud2_msg)
-        self.cloud_obtained = True
+        if self.allow_get_cloud:
+            self.pointcloud = ros_numpy.point_cloud2.pointcloud2_to_xyz_array(pointcloud2_msg)
+            self.cloud_obtained = True
+            self.allow_get_cloud = False
+            print('Pointcloud obtained. Number of points: ' + str(self.pointcloud.shape[0]))
         
         if self.save_cloud:
             self.save_cloud_segment(self.pointcloud, self.cloudpath)
@@ -305,10 +338,10 @@ def realtime_empiric():
 
     robot_name = rospy.get_param('robot_name','mobile_base')
     frame_id = rospy.get_param('frame_id','ground_plane')
-    v = rospy.get_param('velocity', 10.0)
+    v = rospy.get_param('velocity', 5.0)
     save_data = rospy.get_param('save_data', True)
     visualize_cloud = rospy.get_param('visualize_cloud', False)
-    wait = rospy.get_param('wait', 30.0)
+    wait = rospy.get_param('wait', 10.0)
 
     cloudpath = rospy.get_param('cloudpath', 'src/waypoint_publisher/clouds/')
     save_cloud = rospy.get_param('save_cloud', False)
