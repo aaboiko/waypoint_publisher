@@ -8,12 +8,14 @@ from sensor_msgs.msg import PointCloud2
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from numpy.linalg import inv
 from csv import writer
+from sklearn.linear_model import LogisticRegression
 import timeit, time
 import ros_numpy
+import pickle
 
 class PointcloudHandler:
     def __init__(self, params):
-        self.datapath =         params[0]
+        self.model_path =       params[0]
         self.cell_size =        params[1]
         self.get_topic =        params[2]
         self.set_topic =        params[3]
@@ -35,27 +37,11 @@ class PointcloudHandler:
         self.depth_topic =      params[19]
 
         self.cloud_index = 0
-        self.cloud_obtained = False
-        self.allow_get_cloud = False
-        #self.sub = rospy.Subscriber(self.depth_topic, PointCloud2, self.get_cloud_callback)
+        self.model = pickle.load(open(self.model_path, 'rb'))
         rospy.loginfo('depth_topic subscriber started')
 
         self.eval_traversability()
         rospy.spin()
-
-        #########################
-        '''pose = [-9, -6, 1.0, 0, 0, 0, 0]
-        self.set_pose(pose)
-        rate = rospy.Rate(10)
-        vel_pub = rospy.Publisher(self.vel_topic, Twist, queue_size=10)
-        speed = Twist()
-
-        while(True):
-            speed.linear.x = self.v
-            speed.angular.z = 0
-
-            vel_pub.publish(speed)'''
-            #rate.sleep() 
 
 
     def evaluate_cloud(self, cloud):
@@ -271,17 +257,14 @@ class PointcloudHandler:
 
 
     def eval_traversability(self):
-        rospy.loginfo('Starting traversability analysis to generate dataset...')
+        rospy.loginfo('Starting traversability analysis to validate model...')
         size_x = self.world_x_max - self.world_x_min
         size_y = self.world_y_max - self.world_y_min
         iter = 0.0
         progress = 0
         prev = 0
         count = (size_x + 1) * (size_y + 1) * 8
-        n_traversable = 0
-
-        if self.save_data:
-            rospy.loginfo('New dataset file created: ' + self.datapath)
+        rate = 0
 
         for i in range(self.world_x_min, self.world_x_max + 1, int(self.cell_size)):
             for j in range(self.world_y_min, self.world_y_max + 1, int(self.cell_size)):
@@ -318,43 +301,29 @@ class PointcloudHandler:
                     dest = [x_dest, y_dest]
                     
                     res = self.move_to(dest, k)
+                    x_test = np.array([[float(inc_param), float(sigma), float(z_range_param)]])
+                    y_test = int(self.model.predict(x_test)[0])
 
-                    if res > 0:
-                        n_traversable += 1
-
-                    if self.save_data:
-                        line = [float(inc_param), float(sigma), float(n_points), float(z_range_param), int(res)]
-                        with open(self.datapath, 'a') as f_obj:
-                            obj = writer(f_obj)
-                            obj.writerow(line)
-                            f_obj.close()
-                        rospy.loginfo('Line written to the dataset: ' + str(line))
+                    if res == y_test:
+                        rospy.loginfo('Current cell is predicted correctly!')
+                        rate += 1
+                    else:
+                        rospy.loginfo('Model prediction is incorrect')
 
                     if progress != prev:
-                        rospy.loginfo('Analysis in progress: [' + str(progress) + '%]')
+                        rospy.loginfo('Validation in progress: [' + str(progress) + '%]')
                         prev = progress
 
-        trav_rate = int((n_traversable / count) * 100)
-        rospy.loginfo('Traversability analysis finished successfully')
-        rospy.loginfo('Traversability rate: ' + str(trav_rate) + '% (' + str(n_traversable) + '/' + str(count) + ')')
-
-
-    def get_cloud_callback(self, pointcloud2_msg):
-        '''if self.allow_get_cloud:
-            self.pointcloud = ros_numpy.point_cloud2.pointcloud2_to_xyz_array(pointcloud2_msg)
-            self.cloud_obtained = True
-            self.allow_get_cloud = False
-            print('Pointcloud obtained. Number of points: ' + str(self.pointcloud.shape[0]))
-        
-        if self.save_cloud:
-            self.save_cloud_segment(self.pointcloud, self.cloudpath)'''
+        score = int((rate / count) * 100)
+        rospy.loginfo('Model validation finished successfully')
+        rospy.loginfo('Score: ' + str(score) + '% (' + str(rate) + '/' + str(count) + ')')
     
 
-def realtime_empiric():
-    rospy.init_node('realtime_empiric', anonymous=True)
-    rospy.loginfo('realtime_empiric node init')
+def validate():
+    rospy.init_node('validate', anonymous=True)
+    rospy.loginfo('validate node init')
 
-    datapath = rospy.get_param('datapath', 'src/waypoint_publisher/dataset_realtime/house_1.csv')
+    model_path = rospy.get_param('model_path', 'src/waypoint_publisher/models/house_1.sav')
     cell_size = rospy.get_param('cell_size', 1.0)
     get_topic = rospy.get_param('gazebo_get_topic','/gazebo/get_model_state')
     set_topic = rospy.get_param('gazebo_set_topic','/gazebo/set_model_state')
@@ -373,12 +342,12 @@ def realtime_empiric():
     mappath = rospy.get_param('mappath', 'src/waypoint_publisher/maps_realtime/map_cloud_house.txt')
     save_inc_costmap = rospy.get_param('save_inc_costmap', False)
 
-    world_x_min = rospy.get_param('world_x_min', -9)
-    world_x_max = rospy.get_param('world_x_max', 9)
-    world_y_min = rospy.get_param('world_y_min', -6)
-    world_y_max = rospy.get_param('world_y_max', 8)
+    world_x_min = rospy.get_param('world_x_min', -10)
+    world_x_max = rospy.get_param('world_x_max', 10)
+    world_y_min = rospy.get_param('world_y_min', -10)
+    world_y_max = rospy.get_param('world_y_max', 10)
 
-    params = [  datapath,
+    params = [  model_path,
                 cell_size,
                 get_topic,
                 set_topic,
@@ -403,6 +372,6 @@ def realtime_empiric():
 
 
 try:
-    realtime_empiric()
+    validate()
 except rospy.ROSInterruptException:
     rospy.loginfo('Unexpected ROSInterruptException')

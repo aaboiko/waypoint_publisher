@@ -91,6 +91,7 @@ include_directories(
    scripts/fit_model.py
    scripts/empiric_eval.py
    scripts/realtime_empiric.py
+   scripts/validate.py
    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
  )
 
