@@ -6,6 +6,7 @@ find_package(catkin REQUIRED COMPONENTS
   actionlib_msgs
   geometry_msgs
   gazebo_msgs
+  kobuki_msgs
   move_base
   move_base_msgs
   roscpp
@@ -50,6 +51,7 @@ add_action_files(
    move_base_msgs
    actionlib_msgs
    gazebo_msgs
+   kobuki_msgs
  )
 
 catkin_package(
@@ -60,6 +62,7 @@ catkin_package(
   actionlib 
   geometry_msgs 
   gazebo_msgs
+  kobuki_msgs
   move_base 
   move_base_msgs 
   roscpp 
@@ -92,6 +95,8 @@ include_directories(
    scripts/empiric_eval.py
    scripts/realtime_empiric.py
    scripts/validate.py
+   scripts/walker.py
+
    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
  )
 

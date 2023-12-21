@@ -1,10 +1,11 @@
 import rospy, actionlib
 import numpy as np
 import open3d as pcl
-from geometry_msgs.msg import Twist, Pose
+from geometry_msgs.msg import Twist, Pose, Quaternion
 from gazebo_msgs.msg import ModelState
 from gazebo_msgs.srv import GetModelState, SetModelState
 from sensor_msgs.msg import PointCloud2
+from kobuki_msgs.msg import BumperEvent
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from numpy.linalg import inv
 from csv import writer
@@ -36,12 +37,30 @@ class PointcloudHandler:
         self.world_y_max =      params[18]
         self.depth_topic =      params[19]
 
+        self.x_init =           params[20]
+        self.y_init =           params[21]
+        self.heading_init =     params[22]
+
+        self.bumper_topic =     params[23]
+
         self.cloud_index = 0
         self.model = pickle.load(open(self.model_path, 'rb'))
+        self.bumper_pressed = False
+
         rospy.loginfo('depth_topic subscriber started')
 
-        self.eval_traversability()
-        rospy.spin()
+        rospy.Subscriber(self.bumper_topic, BumperEvent, self.bumper_callback)
+        rospy.loginfo('BumperEvent subscriber started')
+
+        self.eval_walking()
+        #rospy.spin()
+
+
+    def bumper_callback(self, data):
+        if data.state == BumperEvent.PRESSED:
+            self.bumper_pressed = True
+        if data.state == BumperEvent.RELEASED:
+            self.bumper_pressed = False
 
 
     def evaluate_cloud(self, cloud):
@@ -198,7 +217,7 @@ class PointcloudHandler:
             rospy.logerr('Error: gazebo server unavailable')
 
 
-    def move_to(self, pose, k):
+    def move_to(self, pose, angle):
         rate = rospy.Rate(10)
         vel_pub = rospy.Publisher(self.vel_topic, Twist, queue_size=10)
         speed = Twist()
@@ -207,7 +226,16 @@ class PointcloudHandler:
         while True:
             cur_time = timeit.default_timer()
             dt = cur_time - timestamp
+
+            #ButtonEvent stop condition
+            if self.bumper_pressed:
+                rospy.loginfo('Bumper pressed!')
+                rospy.loginfo('Goal ' + str(pose) + ' is not traversable')
+                return False
+
+            #timer stop condition
             if dt > self.wait:
+                rospy.loginfo('Traversing time elapsed')
                 rospy.loginfo('Goal ' + str(pose) + ' is not traversable')
                 return False
             
@@ -230,6 +258,8 @@ class PointcloudHandler:
             if np.linalg.norm(delta) <= 0.5:
                 rospy.loginfo('Goal reached: ' + str(curr_goal))
                 break'''
+            
+            k = int((angle / (np.pi * 2)) * 8)
             
             cond_0 = k == 0 and x >= x_goal
             cond_1 = k == 1 and x >= x_goal and y >= y_goal
@@ -256,82 +286,80 @@ class PointcloudHandler:
         return True
 
 
-    def eval_traversability(self):
-        rospy.loginfo('Starting traversability analysis to validate model...')
-        size_x = self.world_x_max - self.world_x_min
-        size_y = self.world_y_max - self.world_y_min
-        iter = 0.0
-        progress = 0
-        prev = 0
-        count = (size_x + 1) * (size_y + 1) * 8
+    def eval_walking(self):
+        rospy.loginfo('Starting traversability analysis in walking mode...')
+        count = 0
         rate = 0
 
-        for i in range(self.world_x_min, self.world_x_max + 1, int(self.cell_size)):
-            for j in range(self.world_y_min, self.world_y_max + 1, int(self.cell_size)):
-                for k in range(8):
-                    angle = k * np.pi / 4
-                    x, y, z, w = quaternion_from_euler(0.0, 0.0, angle)
-                    pose = [i, j, 0.1, x, y, z, w]
-                    self.set_pose(pose)
+        angle = self.heading_init
+        x, y, z, w = quaternion_from_euler(0.0, 0.0, angle)
+        pose = [self.x_init, self.y_init, 0.1, x, y, z, w]
+        self.set_pose(pose)
+        
+        while(True):
+            state = self.get_pose()
+            x_curr = state.pose.position.x
+            y_curr = state.pose.position.y
+            z_curr = state.pose.position.z
+            qx_curr = state.pose.orientation.x
+            qy_curr = state.pose.orientation.y
+            qz_curr = state.pose.orientation.z
+            qw_curr = state.pose.orientation.w
+            roll, pitch, angle_curr = euler_from_quaternion((qx_curr, qy_curr, qz_curr, qw_curr))
 
-                    rospy.loginfo('Waiting for cloud...')
-                    pointcloud2_msg = rospy.wait_for_message(self.depth_topic, PointCloud2, timeout=5)
-                    self.pointcloud = ros_numpy.point_cloud2.pointcloud2_to_xyz_array(pointcloud2_msg)
-                    rospy.loginfo('Poincloud obtained. Number of points: ' + str(self.pointcloud.shape[0]))
+            angle_new = angle_curr + np.random.uniform(-np.pi, np.pi)
+            x, y, z, w = quaternion_from_euler(roll, pitch, angle_new)
+            pose = [x_curr, y_curr, z_curr, x, y, z, w]
+            self.set_pose(pose)
 
-                    segment = self.get_segment(self.pointcloud)
+            rospy.loginfo('Waiting for cloud...')
+            pointcloud2_msg = rospy.wait_for_message(self.depth_topic, PointCloud2, timeout=5)
+            self.pointcloud = ros_numpy.point_cloud2.pointcloud2_to_xyz_array(pointcloud2_msg)
+            rospy.loginfo('Poincloud obtained. Number of points: ' + str(self.pointcloud.shape[0]))
 
-                    if self.save_cloud:
-                        self.save_cloud_segment(segment, self.cloudpath)
+            segment = self.get_segment(self.pointcloud)
 
-                    if self.visualize_cloud:
-                        frame0 = pcl.geometry.TriangleMesh.create_coordinate_frame(size=0.6, origin=[0, 0, 0])
-                        pcl.visualization.draw_geometries([pointcloud2_msg, frame0])
+            if self.save_cloud:
+                self.save_cloud_segment(segment, self.cloudpath)
 
-                    inc_param, sigma, n_points, z_range_param, zmax = self.get_plane_inclination(segment)
-                    iter += 1.0
-                    progress = int((iter / count) * 100)
+            if self.visualize_cloud:
+                frame0 = pcl.geometry.TriangleMesh.create_coordinate_frame(size=0.6, origin=[0, 0, 0])
+                pcl.visualization.draw_geometries([pointcloud2_msg, frame0])
 
-                    if n_points < 3:
-                        rospy.loginfo('Pointcloud contains < 3 points')
-                        continue
+            inc_param, sigma, n_points, z_range_param, zmax = self.get_plane_inclination(segment)
 
-                    x_dest = i + (0.5 + self.cell_size) * np.cos(angle)
-                    y_dest = j + (0.5 + self.cell_size) * np.sin(angle)
-                    dest = [x_dest, y_dest]
-                    
-                    res = self.move_to(dest, k)
-                    x_test = np.array([[float(inc_param), float(sigma), float(z_range_param)]])
-                    y_test = int(self.model.predict(x_test)[0])
+            if n_points < 3:
+                rospy.loginfo('Pointcloud contains < 3 points')
+                continue
 
-                    valid_true = 0
-                    if res == y_test:
-                        rospy.loginfo('Current cell is predicted correctly!')
-                        rate += 1
-                        valid_true = 1
-                    else:
-                        rospy.loginfo('Model prediction is incorrect')
+            x_dest = x_curr + (0.5 + self.cell_size) * np.cos(angle)
+            y_dest = y_curr + (0.5 + self.cell_size) * np.sin(angle)
+            dest = [x_dest, y_dest]
 
-                    if self.save_data:
-                        line = [int(valid_true)]
-                        with open(self.valid_path, 'a') as f_obj:
-                            obj = writer(f_obj)
-                            obj.writerow(line)
-                            f_obj.close()
-                        rospy.loginfo('Line written to the dataset: ' + str(line))
+            res = self.move_to(dest, angle)
+            x_test = np.array([[float(inc_param), float(sigma), float(z_range_param)]])
+            y_test = int(self.model.predict(x_test)[0])
 
-                    if progress != prev:
-                        rospy.loginfo('Validation in progress: [' + str(progress) + '%]')
-                        prev = progress
+            valid_true = 0
+            if res == y_test:
+                rospy.loginfo('Current cell is predicted correctly!')
+                rate += 1
+                valid_true = 1
+            else:
+                rospy.loginfo('Model prediction is incorrect')
 
-        score = int((rate / count) * 100)
-        rospy.loginfo('Model validation finished successfully')
-        rospy.loginfo('Score: ' + str(score) + '% (' + str(rate) + '/' + str(count) + ')')
+            if self.save_data:
+                line = [int(valid_true)]
+                with open(self.valid_path, 'a') as f_obj:
+                    obj = writer(f_obj)
+                    obj.writerow(line)
+                    f_obj.close()
+                rospy.loginfo('Line written to the dataset: ' + str(line))
     
 
-def validate():
-    rospy.init_node('validate', anonymous=True)
-    rospy.loginfo('validate node init')
+def run_walker():
+    rospy.init_node('walker', anonymous=True)
+    rospy.loginfo('walker node init')
 
     model_path = rospy.get_param('model_path', 'src/waypoint_publisher/models/house_1.sav')
     cell_size = rospy.get_param('cell_size', 1.0)
@@ -349,13 +377,19 @@ def validate():
 
     cloudpath = rospy.get_param('cloudpath', 'src/waypoint_publisher/clouds_realtime/')
     save_cloud = rospy.get_param('save_cloud', False)
-    valid_path = rospy.get_param('valid_path', 'src/waypoint_publisher/validation/validation.txt')
+    valid_path = rospy.get_param('valid_path', 'src/waypoint_publisher/validation/walker_0.txt')
     save_inc_costmap = rospy.get_param('save_inc_costmap', False)
 
     world_x_min = rospy.get_param('world_x_min', -10)
     world_x_max = rospy.get_param('world_x_max', 10)
     world_y_min = rospy.get_param('world_y_min', -10)
     world_y_max = rospy.get_param('world_y_max', 10)
+
+    x_init = rospy.get_param('x_init', 0.0)
+    y_init = rospy.get_param('y_init', 0.0)
+    heading_init = rospy.get_param('heading_init', np.pi / 2)
+
+    bumper_topic = rospy.get_param('bumper_topic', '/mobile_base/events/bumper')
 
     params = [  model_path,
                 cell_size,
@@ -376,12 +410,16 @@ def validate():
                 world_x_max,
                 world_y_min,
                 world_y_max,
-                depth_topic]
+                depth_topic,
+                x_init,
+                y_init,
+                heading_init,
+                bumper_topic]
     
     handler = PointcloudHandler(params)
 
 
 try:
-    validate()
+    run_walker()
 except rospy.ROSInterruptException:
     rospy.loginfo('Unexpected ROSInterruptException')

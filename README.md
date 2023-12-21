@@ -1,7 +1,7 @@
 #Waypoint Publisher ROS package
 
 pointcloud_processor.py - node for processing 3D pointcloud. Takes start and destination poses,
-segmentates the pointcloud, generates costmap, builds a apth from start to the destination
+segmentates the pointcloud, generates costmap, builds a path from start to the destination
 
 waypoint_publisher_node.py - uses pointcloud processor to build path between 2 points, generates velocity command to make mobile robot reach the goal
 
