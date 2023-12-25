@@ -7,6 +7,7 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   gazebo_msgs
   kobuki_msgs
+  nav_msgs
   move_base
   move_base_msgs
   roscpp
@@ -52,6 +53,7 @@ add_action_files(
    actionlib_msgs
    gazebo_msgs
    kobuki_msgs
+   nav_msgs
  )
 
 catkin_package(
@@ -63,6 +65,7 @@ catkin_package(
   geometry_msgs 
   gazebo_msgs
   kobuki_msgs
+  nav_msgs
   move_base 
   move_base_msgs 
   roscpp 

@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import actionlib
 import waypoint_publisher.msg as msg
 from datetime import datetime
+import pickle
 
 z_min = -1.0
 z_max = 2.0
@@ -70,12 +71,20 @@ def segmentate_cloud(cloud, size_x, size_y, xmin, xmax, ymin, ymax, cell_size):
 
 
 def get_plane_inclination(segment):
+    #rospy.loginfo('Get plane inclination started')
     n = len(segment)
     big = 10e6
-    if n < 3:
-        return big, big, big
 
-    count_param = 1.0 / n
+    xmax = -np.inf
+    xmin = np.inf
+    ymax = -np.inf
+    ymin = np.inf
+    zmax = -np.inf
+    zmin = np.inf
+
+    if n < 3:
+        return big, big, 0, big, big
+
     sign = -1.0
     A = np.zeros((n, 3))
     B = sign * np.ones((n, 1))
@@ -85,6 +94,12 @@ def get_plane_inclination(segment):
         y = segment[i][1]
         z = segment[i][2]
         A[i,:] = np.array([x, y, z])
+        xmax = max(xmax, x)
+        xmin = min(xmin, x)
+        ymax = max(ymax, y)
+        ymin = min(ymin, y)
+        zmax = max(zmax, z)
+        zmin = min(zmin, z)
 
     X = inv(np.dot(A.T, A)) @ A.T @ B
 
@@ -101,18 +116,25 @@ def get_plane_inclination(segment):
 
     x_norm = np.linalg.norm(X)
     X = X / x_norm
+    z_range_param = zmax - zmin
     
     if abs(X[2]) <= 10e-3:
-        return big, sigma, count_param
+        return big, sigma, n, z_range_param, zmax
 
     inc_cos = abs(X[2])
     inc_param = np.sqrt(1.0 - inc_cos**2) / inc_cos
 
-    return inc_param, sigma, count_param
+    '''rospy.loginfo('Get plane inclination finished')
+    rospy.loginfo('xmin = '+str(xmin)+' xmax = '+str(xmax))
+    rospy.loginfo('ymin = '+str(ymin)+' ymax = '+str(ymax))
+    rospy.loginfo('zmin = '+str(zmin)+' zmax = '+str(zmax))'''
+    return inc_param, sigma, n, z_range_param, zmax
 
 
-def cost_function(params, koefs):
-    return 2 * (1.0 / (1.0 + np.exp(-np.dot(koefs, params)))) - 1.0
+def cost_function(params, model_path):
+    #return 2 * (1.0 / (1.0 + np.exp(-np.dot(koefs, params)))) - 1.0
+    model = pickle.load(open(model_path, 'rb'))
+    return 1 - int(model.predict(params)[0])
 
 
 def plot_map(occ_map, start, goal):
@@ -204,7 +226,7 @@ def grid_to_float(point, offset, cell_size):
 
 
 def run_path_planning(occ_map, initial, dest, offset, cell_size, params):
-    plot_map_param, plot_expanded_param, plot_costs_param, save_map, filepath = params
+    rospy.loginfo('Path planning in progress...')
 
     costs = np.ones(occ_map.shape) * np.inf
     closed_flags = np.zeros(occ_map.shape)
@@ -231,14 +253,18 @@ def run_path_planning(occ_map, initial, dest, offset, cell_size, params):
 
         parent = np.array([x, y])
         closed_flags[x, y] = 1
+        #rospy.loginfo('Current parent cell: ' + str(parent))
 
         neighs = get_neighborhood(parent, occ_map.shape)
+        #rospy.loginfo('neighs: ' + str(neighs))
         for neigh in neighs:
+            #rospy.loginfo('Current neigh: ' + str(neigh))
             if costs[neigh[0], neigh[1]] > costs[x, y] + get_edge_cost(parent, neigh, occ_map):
                 costs[neigh[0], neigh[1]] = costs[x, y] + get_edge_cost(parent, neigh, occ_map)
                 predecessors[neigh[0], neigh[1]] = parent
 
     if np.array_equal(parent, goal):
+        #rospy.loginfo('Parent and goal are equal')
         path_length = 0
 
         while predecessors[parent[0], parent[1]][0] >= 0:
@@ -258,7 +284,7 @@ def run_path_planning(occ_map, initial, dest, offset, cell_size, params):
     return path_array, success
 
 
-def get_costmap(point_grid, size_x, size_y, koefs):
+def get_costmap(point_grid, size_x, size_y, koefs, model_path):
     costmap = np.zeros((size_x, size_y))
     rospy.loginfo('Creating costmap...')
     iter = 0.0
@@ -268,9 +294,9 @@ def get_costmap(point_grid, size_x, size_y, koefs):
 
     for i in range(size_x):
         for j in range(size_y):
-            inc_param, sigma, count_param = get_plane_inclination(point_grid[(i,j)])
-            params = np.array([inc_param, sigma, count_param])
-            costmap[i,j] = cost_function(params, koefs)
+            inc_param, sigma, n, z_range_param, zmax = get_plane_inclination(point_grid[(i,j)])
+            params = np.array([[float(inc_param), float(sigma), float(z_range_param)]])
+            costmap[i,j] = cost_function(params, model_path)
             iter += 1.0
             progress = int((iter / count) * 100)
             
@@ -295,6 +321,7 @@ class GetPathAction(object):
     def execute_cb(self, goal):
         save_map = self.params[3]
         filepath = self.params[4]
+        model_path = self.params[5]
 
         cell_size = float(goal.cell_size)
         koefs = np.array(goal.koefs)
@@ -304,9 +331,9 @@ class GetPathAction(object):
 
         cloud, points_number = read_cloud(filepath)
         grid_size_x, grid_size_y, xmin, xmax, ymin, ymax = evaluate_cloud(cloud, cell_size)
-        #offset = [xmin, ymin]
+        offset = [xmin, ymin]
         point_grid = segmentate_cloud(cloud, grid_size_x, grid_size_y, xmin, xmax, ymin, ymax, cell_size)
-        costmap = get_costmap(point_grid, grid_size_x, grid_size_y, koefs)
+        costmap = get_costmap(point_grid, grid_size_x, grid_size_y, koefs, model_path)
         path_array, success = run_path_planning(costmap, start, dest, offset, cell_size, self.params)
 
         if save_map:
@@ -341,7 +368,16 @@ def run_node():
     plot_costs_param = rospy.get_param('plot_costs', False)
     save_map = rospy.get_param('save_map', True)
     filepath = rospy.get_param('filepath', '/home/anatoliy/.ros/cloud_lab_1.ply')
-    params = [plot_map_param, plot_expanded_param, plot_costs_param, save_map, filepath]
+    model_path = rospy.get_param('model_path', 'src/waypoint_publisher/models/house_1.sav')
+
+    params = [
+        plot_map_param, 
+        plot_expanded_param, 
+        plot_costs_param, 
+        save_map, 
+        filepath,
+        model_path
+    ]
     rospy.loginfo('Node pointcloud_processor init')
 
     server = GetPathAction(rospy.get_name(), params)
